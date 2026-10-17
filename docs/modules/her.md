@@ -24,6 +24,8 @@ HER requires the environment to follow the legacy [gym_robotics.GoalEnv interfac
 In short, the `gym.Env` must have:
 \- a vectorized implementation of `compute_reward()`
 \- a dictionary observation space with three keys: `observation`, `achieved_goal` and `desired_goal`
+
+If the environment also implements the vectorized Gymnasium-Robotics `compute_terminated(achieved_goal, desired_goal, info)` method, HER recomputes terminal flags for relabeled goals. Without that optional method, HER preserves the stored terminal flags (excluding time-limit truncations), because the legacy GoalEnv interface provides no general way to infer goal-dependent termination.
 :::
 
 :::{warning}
