@@ -469,3 +469,68 @@ def test_performance_her(n_bits):
 
     # 90% training success
     assert np.mean(model.ep_success_buffer) > 0.90
+
+
+def _make_her_buffer_with_two_transitions(env):
+    """Build one complete two-step episode whose first transition is not terminal."""
+    vec_env = make_vec_env(lambda: env, n_envs=1)
+    replay_buffer = HerReplayBuffer(
+        buffer_size=8,
+        observation_space=vec_env.observation_space,
+        action_space=vec_env.action_space,
+        env=vec_env,
+        n_envs=1,
+        n_sampled_goal=1,
+        goal_selection_strategy="future",
+        copy_info_dict=True,
+    )
+    obs = vec_env.reset()
+    next_obs = {key: value.copy() for key, value in obs.items()}
+    next_obs["observation"] = np.ones_like(next_obs["observation"])
+    next_obs["achieved_goal"] = np.ones_like(next_obs["achieved_goal"])
+    replay_buffer.add(
+        obs,
+        next_obs,
+        action=np.array([0]),
+        reward=np.array([0.0]),
+        done=np.array([False]),
+        infos=[{}],
+    )
+    # Close the episode so the first transition can be sampled by HER.
+    replay_buffer.add(
+        next_obs,
+        next_obs,
+        action=np.array([0]),
+        reward=np.array([0.0]),
+        done=np.array([True]),
+        infos=[{}],
+    )
+    return vec_env, replay_buffer
+
+
+def test_her_recomputes_virtual_termination_for_relabelled_goal():
+    """A virtual goal reached at the next state must terminate even if the original goal did not."""
+    class GoalTerminatingBitFlippingEnv(BitFlippingEnv):
+        def compute_terminated(self, achieved_goal, desired_goal, info):
+            return np.all(np.asarray(achieved_goal) == np.asarray(desired_goal), axis=-1)
+
+    env, replay_buffer = _make_her_buffer_with_two_transitions(GoalTerminatingBitFlippingEnv(n_bits=4))
+    try:
+        assert replay_buffer._supports_compute_terminated
+        samples = replay_buffer._get_virtual_samples(np.array([0]), np.array([0]))
+        assert samples.dones.shape == (1, 1)
+        assert samples.dones.item() == 1.0
+    finally:
+        env.close()
+
+
+def test_her_preserves_legacy_done_semantics_without_compute_terminated():
+    """Legacy GoalEnv implementations keep their stored terminal/timeout behavior."""
+    env, replay_buffer = _make_her_buffer_with_two_transitions(BitFlippingEnv(n_bits=4))
+    try:
+        assert not replay_buffer._supports_compute_terminated
+        samples = replay_buffer._get_virtual_samples(np.array([0]), np.array([0]))
+        assert samples.dones.shape == (1, 1)
+        assert samples.dones.item() == 0.0
+    finally:
+        env.close()
