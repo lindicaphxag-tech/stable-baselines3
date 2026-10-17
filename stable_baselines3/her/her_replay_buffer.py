@@ -71,6 +71,9 @@ class HerReplayBuffer(DictReplayBuffer):
             handle_timeout_termination=handle_timeout_termination,
         )
         self.env = env
+        # Goal-conditioned environments may expose the Gymnasium-Robotics termination protocol.
+        # Cache capability detection: probing a remote VecEnv on every replay sample is expensive.
+        self._supports_compute_terminated: bool | None = env.has_attr("compute_terminated")
         self.copy_info_dict = copy_info_dict
 
         # convert goal_selection_strategy into GoalSelectionStrategy if string
@@ -120,6 +123,8 @@ class HerReplayBuffer(DictReplayBuffer):
         self.__dict__.update(state)
         assert "env" not in state
         self.env = None
+        # The environment is restored separately through set_env(), so re-detect its capabilities then.
+        self._supports_compute_terminated = None
 
     def set_env(self, env: VecEnv) -> None:
         """
@@ -131,6 +136,7 @@ class HerReplayBuffer(DictReplayBuffer):
             raise ValueError("Trying to set env of already initialized environment.")
 
         self.env = env
+        self._supports_compute_terminated = env.has_attr("compute_terminated")
 
     def add(  # type: ignore[override]
         self,
@@ -333,6 +339,24 @@ class HerReplayBuffer(DictReplayBuffer):
             indices=[0],
         )
         rewards = rewards[0].astype(np.float32)  # env_method returns a list containing one element
+
+        # Relabeling a goal can change whether this transition terminates. If the environment
+        # implements Gymnasium-Robotics' optional compute_terminated protocol, recompute the
+        # terminal mask for the relabeled goal rather than reusing the original goal's done flag.
+        if self._supports_compute_terminated:
+            virtual_dones = self.env.env_method(
+                "compute_terminated",
+                next_obs["achieved_goal"],
+                obs["desired_goal"],
+                infos,
+                indices=[0],
+            )[0]
+            virtual_dones = np.asarray(virtual_dones, dtype=np.float32).reshape(-1, 1)
+        else:
+            # Legacy GoalEnv implementations only define compute_reward; preserve their stored
+            # termination/timeout semantics because there is no generic way to infer new dones.
+            virtual_dones = self.dones[batch_indices, env_indices] * (1 - self.timeouts[batch_indices, env_indices])
+
         obs = self._normalize_obs(obs, env)  # type: ignore[assignment]
         next_obs = self._normalize_obs(next_obs, env)  # type: ignore[assignment]
 
@@ -344,11 +368,7 @@ class HerReplayBuffer(DictReplayBuffer):
             observations=observations,
             actions=self.to_torch(self.actions[batch_indices, env_indices]),
             next_observations=next_observations,
-            # Only use dones that are not due to timeouts
-            # deactivated by default (timeouts is initialized as an array of False)
-            dones=self.to_torch(
-                self.dones[batch_indices, env_indices] * (1 - self.timeouts[batch_indices, env_indices])
-            ).reshape(-1, 1),
+            dones=self.to_torch(virtual_dones),
             rewards=self.to_torch(self._normalize_reward(rewards.reshape(-1, 1), env)),  # type: ignore[attr-defined]
         )
 
