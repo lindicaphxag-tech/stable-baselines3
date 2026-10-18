@@ -1,0 +1,38 @@
+name: gSDE tanh callback-snapshot CPU regression
+
+on:
+  pull_request:
+    branches:
+      - fix/sde-tanh-callback-safe-latent-20261018
+    paths:
+      - ".github/workflows/sde_tanh_callback_cpu.yml"
+      - "stable_baselines3/common/on_policy_algorithm.py"
+      - "stable_baselines3/common/distributions.py"
+      - "stable_baselines3/common/buffers.py"
+      - "stable_baselines3/common/policies.py"
+      - "tests/test_gsde_tanh_latent.py"
+      - "docs/misc/changelog.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  callback-latent-snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install CPU PyTorch
+        run: python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Install SB3 and test dependencies
+        run: python -m pip install -e . pytest pytest-cov ruff
+      - name: Check modified code style
+        run: |
+          ruff check stable_baselines3/common/on_policy_algorithm.py tests/test_gsde_tanh_latent.py
+          ruff format --check stable_baselines3/common/on_policy_algorithm.py tests/test_gsde_tanh_latent.py
+      - name: Run gSDE tanh and callback mutation regressions
+        run: pytest -q tests/test_gsde_tanh_latent.py tests/test_sde.py
