@@ -200,6 +200,11 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 # Convert to pytorch tensor or to TensorDict
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)  # type: ignore[arg-type]
                 actions, values, log_probs = self.policy(obs_tensor)
+                # Snapshot the latent at collection time: callbacks may call predict(), which reuses
+                # action_dist and overwrites its mutable gaussian_actions attribute.
+                gaussian_actions = getattr(self.policy.action_dist, "gaussian_actions", None)
+                if gaussian_actions is not None:
+                    gaussian_actions = gaussian_actions.detach().clone()
             actions = actions.cpu().numpy()
 
             # Rescale and perform action
@@ -244,7 +249,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                         terminal_value = self.policy.predict_values(terminal_obs)[0]  # type: ignore[arg-type]
                     rewards[idx] += self.gamma * terminal_value
 
-            gaussian_actions = getattr(self.policy.action_dist, "gaussian_actions", None)
             rollout_buffer.add(
                 self._last_obs,  # type: ignore[arg-type]
                 actions,
